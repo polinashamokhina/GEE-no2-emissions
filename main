@@ -1,0 +1,230 @@
+// #############################################################################
+// ### 1 VARIABLES & PARAMETERS ###
+// #############################################################################
+
+// datasets
+
+var no2_image_collection = ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_NO2');
+var borders = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+var countries = ee.FeatureCollection("USDOS/LSIB/2017");
+
+var databand = 'NO2_column_number_density';
+var cloudband = 'cloud_fraction';
+
+// dates
+
+var startDate = '2021-02-01';
+var endDate = '2021-03-01';
+
+// styling
+
+var app_title_label = ui.Label({
+  value: "Nitrogen Dioxide emissions",
+  style: {fontSize: '20px', fontWeight: 'bold', color: 'pink', stretch: 'horizontal'}
+});
+
+var appDescription = ui.Label ({
+  value: '1. Set the country and the time period to get NO2 emissions intersity\n2. Click on map to get time-series chart',
+  style: {whiteSpace: 'pre', fontSize: '12px'},
+});
+
+var country_selector = ui.Select({
+  items: country_list_sorted,
+  placeholder: 'Select a country '
+});
+
+var start_date_label = ui.Label ({value: 'Select start date '});
+
+var start_date_selector = ui.DateSlider({
+  start: '2014-01-01',
+  style: {stretch: 'horizontal'}
+});
+
+var end_date_label = ui.Label ({value: 'Select end date '});
+
+var end_date_selector = ui.DateSlider({
+  start: '2014-01-01',
+  style: {stretch: 'horizontal'}
+});
+
+var visParams = {
+  min: 0.0,
+  max: 0.00017,
+  palette: ['black', 'blue', 'purple', 'cyan', 'green', 'yellow', 'red']
+};
+
+var borderStyle =  {color: 'pink', width: 2, fillColor: 'FF000000'};
+
+var visParams2 = {min: 120, max: 0, palette: ['red', 'orange', 'yellow', 'green', 'aqua', 'purple', 'blue', 'black']};
+
+var chartVis = {
+  lineWidth: 1.5,
+  pointSize: 2,
+  colors: ['pink'],
+  title: 'Tropospheric NO2 emissions',
+  vAxis: {title: 'NO2'},
+  hAxis: {title: 'Date', format: 'YYYY-MMM'},
+  interpolateNulls: true,
+  scale:100,
+};
+var chart_placeholder = ui.Label('Click on the map to create time-series chart ');
+var chart_panel = ui.Panel ({widgets: [chart_placeholder], style: {border: '1px solid black'}});
+
+var author_label = ui.Label ({
+  value: 'Shamokhina Polina ',
+  style: {fontSize: '12px', fontWeight: 'bold', color: 'crimson', stretch: 'horizontal'}
+});
+
+var colorBar = ui.Thumbnail({
+  image: ee.Image.pixelLonLat().select(0),
+  params: {min: 0, max: 1, palette: visParams2.palette, bbox: [0, 0, 1, 0.1], dimensions: '100x10', format: 'png', },
+  style: {stretch: 'horizontal', margin: '0px 8px', maxHeight: '20px'},
+});
+
+var legendLabels = ui.Panel({
+  widgets: [
+    ui.Label(visParams2.min, {margin: '4px 8px', fontSize: '12px'}), //
+    ui.Label((visParams2.min/2), {margin: '4px 8px', textAlign: 'center', stretch: 'horizontal', fontSize: '12px'}),
+    ui.Label(visParams2.max, {margin: '4px 8px', fontSize: '12px'})
+  ],
+  layout: ui.Panel.Layout.flow('horizontal')
+});
+
+var legendTitle = ui.Label({
+  value: 'NO₂  tropospheric column, μmol/m²',
+  style: {fontWeight: 'bold', fontSize: '12px'}
+});
+
+var legendPanel = ui.Panel({
+  widgets: [legendTitle, colorBar, legendLabels],
+  style: {width: '20%', position: 'bottom-center'}  
+});
+
+
+var control_panel = ui.Panel ({
+  widgets: [
+    app_title_label, 
+    appDescription, 
+    panel_break(),
+    country_selector, 
+    start_date_label, 
+    start_date_selector, 
+    end_date_label, 
+    end_date_selector, 
+    chart_panel, 
+    panel_break(),
+    author_label,
+  ],
+  style: {width: '26%', position: 'bottom-right', maxHeight: '490px' },
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// other
+
+var selected_country = 'Germany';
+var cloudThreshold = 0.1;
+
+var country_list = countries.aggregate_array('COUNTRY_NA');
+var country_list_sorted = country_list.sort().getInfo();
+
+
+// #############################################################################
+// ### 2 FUNCTIONS ###
+// #############################################################################
+
+function filtered_country_borders(country_name){
+  return borders.filter(ee.Filter.eq('country_na', country_name));
+}
+
+function applyFilters(target_collection,country){
+  return target_collection.filterDate(startDate, endDate).filterBounds(country);
+}
+
+function maskClouds(img){
+  var mask = img.select(cloudband).lt(cloudThreshold);
+  return img.updateMask(mask);
+}
+
+function maskComposite(imgColl, country){
+  var imgClipped = imgColl.select(databand).median().clip(country);
+  return imgClipped;
+}
+
+function update_map() {
+  var country = filtered_country_borders(selected_country);
+  var filteredColl = applyFilters(no2_image_collection, country);
+  var maskedColl = filteredColl.map(maskClouds);
+  var composite = maskComposite(maskedColl, country);
+  
+  var composite_layer = ui.Map.Layer(composite.select(databand), visParams, 'no2 emissions');
+  var country_layer = ui.Map.Layer(country.style(borderStyle), {}, 'selected country');
+  country_selector.items().reset(country_list_sorted);
+  
+  Map.layers().set(0, composite_layer);
+  Map.layers().set(1, country_layer);
+  Map.centerObject(country, 5);
+
+}
+
+function initialize_ui() {
+  country_selector.setValue(selected_country);
+  country_selector.onChange(handle_country_selector);
+  
+  start_date_selector.setValue(startDate);
+  start_date_selector.onChange(start_date_handler);
+  
+  end_date_selector.setValue(endDate);
+  end_date_selector.onChange(end_date_handler);
+  
+  Map.onClick(handle_map_click);
+}
+
+function handle_country_selector(countryName){
+  selected_country = countryName;
+  update_map();
+}
+
+function start_date_handler(date_range) {
+  startDate = date_range.start();
+  update_map();
+}
+
+function end_date_handler(date_range) {
+  endDate = date_range.start();
+  update_map();
+}
+
+function handle_map_click(coordinates) {
+  var point=ee.Geometry.Point([coordinates.lat,coordinates.lon])
+  var chart = ui.Chart.image.series({
+  imageCollection: filteredColl.select('NO2_column_number_density'),
+  region: point,
+  reducer: ee.Reducer.mean(),
+  scale: 20}).setOptions(chartVis)
+  chart_panel.widgets().set(0,chart);
+}
+
+function panel_break(){
+  var panelbreak = ui.Panel({style: {stretch: 'horizontal', height: '1px', backgroundColor: 'grey', margin: '8px 0px'}});
+  return panelbreak;
+}
+
+// #############################################################################
+// ### 3 IMPLEMENTATION ###
+// #############################################################################
+
+//var single_image = no2_image_collection.first().select(databand);
+
+var country = filtered_country_borders(selected_country);
+var filteredColl = applyFilters(no2_image_collection, country);
+var maskedColl = filteredColl.map(maskClouds);
+var composite = maskComposite(maskedColl, country);
+
+// #############################################################################
+// ### 4 VISUALIZATION ###
+// #############################################################################
+
+Map.add(control_panel);
+Map.add(legendPanel);
+update_map();
+initialize_ui();
